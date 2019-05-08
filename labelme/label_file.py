@@ -102,7 +102,7 @@ class LabelFile(object):
 
         # Only replace data after everything is loaded.
         self.flags = flags
-        self.shapes = shapes
+        self.shapes = list(shapes)
         self.imagePath = imagePath
         self.imageData = imageData
         self.lineColor = lineColor

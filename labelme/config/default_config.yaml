@@ -3,7 +3,7 @@ display_label_popup: true
 instance_label_auto_increment: true
 store_data: true
 keep_prev: false
-show_diff_with_prev_img: true
+show_diff_with_prev_img: false
 logger_level: info
 
 flags: null
