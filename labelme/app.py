@@ -3,6 +3,9 @@ import os
 import os.path as osp
 import re
 import webbrowser
+import numpy as np
+import scipy.ndimage.morphology
+import skimage.transform as skt
 
 from qtpy import QtCore
 from qtpy.QtCore import Qt
@@ -251,6 +254,14 @@ class MainWindow(QtWidgets.QMainWindow):
             checkable=True)
         toggle_keep_prev_mode.setChecked(self._config['keep_prev'])
 
+        toggle_show_diff_with_prev_img = action(
+            'Show Diff Image',
+            self.toggleShowDiffImgMode,
+            shortcuts['toggle_show_diff_with_prev_img'], None,
+            'Toggle "show diff with previous image" mode',
+            checkable=True)
+        toggle_show_diff_with_prev_img.setChecked(self._config['show_diff_with_prev_img'])
+
         createMode = action(
             'Create Polygons',
             lambda: self.toggleDrawMode(False, createMode='polygon'),
@@ -412,6 +423,7 @@ class MainWindow(QtWidgets.QMainWindow):
             deleteFile=deleteFile,
             lineColor=color1, fillColor=color2,
             toggleKeepPrevMode=toggle_keep_prev_mode,
+            toggleShowDiffImgMode=toggle_show_diff_with_prev_img,
             delete=delete, edit=edit, copy=copy,
             undoLastPoint=undoLastPoint, undo=undo,
             addPoint=addPoint,
@@ -429,7 +441,7 @@ class MainWindow(QtWidgets.QMainWindow):
             fileMenuActions=(open_, opendir, save, saveAs, close, quit),
             tool=(),
             editMenu=(edit, copy, delete, None, undo, undoLastPoint,
-                      None, color1, color2, None, toggle_keep_prev_mode),
+                      None, color1, color2, None, toggle_keep_prev_mode, toggle_show_diff_with_prev_img),
             # menu shown at right click
             menu=(
                 createMode,
@@ -1107,6 +1119,56 @@ class MainWindow(QtWidgets.QMainWindow):
         for item, shape in self.labelList.itemsToShapes:
             item.setCheckState(Qt.Checked if value else Qt.Unchecked)
 
+    def QImageToNumpy(self, qt_image):
+        qt_image = qt_image.convertToFormat(QtGui.QImage.Format_RGB888)
+        width = qt_image.width()
+        height = qt_image.height()
+        ptr = qt_image.bits()
+        ptr.setsize(qt_image.byteCount())
+        arr = np.array(ptr).reshape(height, width, 3)  # Copies the data
+        return arr
+
+    def MaskedImage(self, image, prev_image, thr_to_median = 5.0):
+        if prev_image.isNull():
+            return image
+
+        errode_rel  = 0.005
+        dilation_sz = 0.03
+        k = 5
+
+        scale = k / (errode_rel * min(image.width(), image.height()))
+        scaled_sz = (int(image.height()*scale), int(image.width()*scale))
+
+        np_image_orig = self.QImageToNumpy(image)
+        np_image = skt.resize(np_image_orig, scaled_sz)
+        im_median = np.median(np_image, axis = (0,1))
+        np_prev_image = skt.resize(self.QImageToNumpy(prev_image), scaled_sz)
+        prev_median = np.median(np_prev_image, axis = (0,1))
+        #d = np_image - np_prev_image
+        #d[np_image < np_prev_image] *= 255 # abs. diff.
+        d = np.abs(np_image - im_median - np_prev_image + prev_median)
+        d = np.amax(d, axis = 2, keepdims=False)
+        #thr = np.median(d.reshape((-1)))*thr_to_median
+        #mask = (d>=thr)
+        mask = d
+
+        errode_sz = k
+        dilation_sz = int(dilation_sz/errode_rel*k)
+        erode_el = np.zeros((errode_sz,errode_sz), dtype = np.uint8)
+        dilation_el = np.zeros((dilation_sz,dilation_sz), dtype = np.uint8)
+        mask = scipy.ndimage.morphology.grey_erosion(mask, structure = erode_el)
+        mask = scipy.ndimage.morphology.grey_dilation(mask, structure = dilation_el)
+
+        med = np.median(mask.reshape((-1)))
+        mask = np.clip(mask,med,med*thr_to_median)
+
+        mask = mask/(np.max(mask)+1.e-8)
+        mask = skt.resize(0.1 + 0.9*mask, (image.height(), image.width())) # , order = 0: Nearest-neighbor
+
+        np_image = (np_image_orig * np.expand_dims(mask, axis=2)).astype(np.uint8)
+        image =  QtGui.QImage(np_image.data, np_image.shape[1], np_image.shape[0], np_image.strides[0], QtGui.QImage.Format_RGB888)
+        return image
+
     def loadFile(self, filename=None):
         """Load the specified file, or the last opened file if None."""
         # changing fileListWidget loads file
@@ -1171,27 +1233,33 @@ class MainWindow(QtWidgets.QMainWindow):
                 .format(filename, ','.join(formats)))
             self.status("Error reading %s" % filename)
             return False
+        self.prev_image = self.image
         self.image = image
         self.filename = filename
-        if self._config['keep_prev']:
-            prev_shapes = self.canvas.shapes
-        self.canvas.loadPixmap(QtGui.QPixmap.fromImage(image))
+        self.prev_shapes = self.canvas.shapes
+        self.redraw()
+        self.status("Loaded %s" % osp.basename(str(filename)))
+        return True
+
+    def redraw(self):
+        if self._config['show_diff_with_prev_img']:
+            self.canvas.loadPixmap(QtGui.QPixmap.fromImage(self.MaskedImage(self.image, self.prev_image)))
+        else:
+            self.canvas.loadPixmap(QtGui.QPixmap.fromImage(self.image))
         if self._config['flags']:
             self.loadFlags({k: False for k in self._config['flags']})
         if self.labelFile:
             self.loadLabels(self.labelFile.shapes)
             if self.labelFile.flags is not None:
                 self.loadFlags(self.labelFile.flags)
-        if self._config['keep_prev'] and not self.labelList.shapes:
-            self.loadShapes(prev_shapes, replace=False)
+        if self._config['keep_prev'] and not (self.labelFile and self.labelFile.shapes):
+            self.loadShapes(self.prev_shapes, replace=False)
         self.setClean()
         self.canvas.setEnabled(True)
         self.adjustScale(initial=True)
         self.paintCanvas()
         self.addRecentFile(self.filename)
         self.toggleActions(True)
-        self.status("Loaded %s" % osp.basename(str(filename)))
-        return True
 
     def resizeEvent(self, event):
         if self.canvas and not self.image.isNull()\
@@ -1499,6 +1567,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def toggleKeepPrevMode(self):
         self._config['keep_prev'] = not self._config['keep_prev']
+
+    def toggleShowDiffImgMode(self):
+        self._config['show_diff_with_prev_img'] = not self._config['show_diff_with_prev_img']
+        self.redraw()
 
     def deleteSelectedShape(self):
         yes, no = QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No
