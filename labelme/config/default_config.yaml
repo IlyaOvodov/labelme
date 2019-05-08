@@ -3,6 +3,7 @@ display_label_popup: true
 instance_label_auto_increment: true
 store_data: true
 keep_prev: false
+show_diff_with_prev_img: true
 logger_level: info
 
 flags: null
@@ -77,3 +78,4 @@ shortcuts:
   edit_line_color: Ctrl+L
   edit_fill_color: Ctrl+Shift+L
   toggle_keep_prev_mode: Ctrl+P
+  toggle_show_diff_with_prev_img: Ctrl+Alt+D
