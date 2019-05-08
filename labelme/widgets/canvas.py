@@ -36,7 +36,7 @@ class Canvas(QtWidgets.QWidget):
     _fill_drawing = False
 
     def __init__(self, *args, **kwargs):
-        self.epsilon = kwargs.pop('epsilon', 10.0)
+        self.epsilon = kwargs.pop('epsilon', 1.0)
         super(Canvas, self).__init__(*args, **kwargs)
         # Initialise local state.
         self.mode = self.EDIT
@@ -171,7 +171,7 @@ class Canvas(QtWidgets.QWidget):
                 # Project the point to the pixmap's edges.
                 pos = self.intersectionPoint(self.current[-1], pos)
             elif len(self.current) > 1 and self.createMode == 'polygon' and\
-                    self.closeEnough(pos, self.current[0]):
+                    (self.closeEnough(pos, self.current[0]) or (QtCore.Qt.ControlModifier == int(ev.modifiers()))):
                 # Attract line to starting point and
                 # colorise to alert the user.
                 pos = self.current[0]

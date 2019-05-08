@@ -41,7 +41,7 @@ fit_to_content:
   column: true
   row: false
 
-epsilon: 10.0
+epsilon: 1.0
 
 shortcuts:
   close: Ctrl+W
