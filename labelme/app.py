@@ -8,7 +8,7 @@ import scipy.ndimage.morphology
 import skimage.transform as skt
 
 from qtpy import QtCore
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, QItemSelectionModel
 from qtpy import QtGui
 from qtpy import QtWidgets
 
@@ -907,6 +907,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if shape:
                 item = self.labelList.get_item_from_shape(shape)
                 item.setSelected(True)
+                self.labelList.setCurrentItem(item, QItemSelectionModel.Select)
             else:
                 self.labelList.clearSelection()
         self.actions.delete.setEnabled(selected)
@@ -915,12 +916,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.actions.shapeLineColor.setEnabled(selected)
         self.actions.shapeFillColor.setEnabled(selected)
 
-    def addLabel(self, shape):
+    def addLabel(self, shape, add_to_end):
         item = QtWidgets.QListWidgetItem(shape.label)
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         item.setCheckState(Qt.Checked)
         self.labelList.itemsToShapes.append((item, shape))
-        self.labelList.addItem(item)
+        row_to_insert = self.labelList.currentRow() + 1
+        if add_to_end or (row_to_insert == 0):
+            row_to_insert = self.labelList.count()
+        self.labelList.insertItem(row_to_insert, item)
+        self.labelList.setCurrentRow(row_to_insert, QItemSelectionModel.Select)
         if not self.uniqLabelList.findItems(shape.label, Qt.MatchExactly):
             self.uniqLabelList.addItem(shape.label)
             self.uniqLabelList.sortItems()
@@ -934,7 +939,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def loadShapes(self, shapes, replace=True):
         for shape in shapes:
-            self.addLabel(shape)
+            self.addLabel(shape, add_to_end = True)
         self.canvas.loadShapes(shapes, replace=replace)
 
     def loadLabels(self, shapes):
@@ -1014,7 +1019,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
 
     def copySelectedShape(self):
-        self.addLabel(self.canvas.copySelectedShape())
+        self.addLabel(self.canvas.copySelectedShape(), add_to_end = False)
         # fix copy and delete
         self.shapeSelectionChanged(True)
 
@@ -1064,7 +1069,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.canvas.undoLastLine()
             self.canvas.shapesBackups.pop()
         else:
-            self.addLabel(self.canvas.setLastLabel(text))
+            self.addLabel(self.canvas.setLastLabel(text), add_to_end = False)
             self.actions.editMode.setEnabled(True)
             self.actions.undoLastPoint.setEnabled(False)
             self.actions.undo.setEnabled(True)
@@ -1602,7 +1607,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def copyShape(self):
         self.canvas.endMove(copy=True)
-        self.addLabel(self.canvas.selectedShape)
+        self.addLabel(self.canvas.selectedShape, add_to_end = False)
         self.setDirty()
 
     def moveShape(self):
