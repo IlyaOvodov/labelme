@@ -84,6 +84,7 @@ class MainWindow(QtWidgets.QMainWindow):
             show_text_field=self._config['show_label_text_field'],
             completion=self._config['label_completion'],
             fit_to_content=self._config['fit_to_content'],
+            flags=self._config['label_flags']
         )
 
         self.labelList = LabelQListWidget()
@@ -312,14 +313,14 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         editMode = action('Edit Polygons', self.setEditMode,
                           shortcuts['edit_polygon'], 'edit',
-                          'Move and edit polygons', enabled=False)
+                          'Move and edit the selected polygons', enabled=False)
 
-        delete = action('Delete Polygon', self.deleteSelectedShape,
+        delete = action('Delete Polygons', self.deleteSelectedShape,
                         shortcuts['delete_polygon'], 'cancel',
-                        'Delete', enabled=False)
-        copy = action('Duplicate Polygon', self.copySelectedShape,
+                        'Delete the selected polygons', enabled=False)
+        copy = action('Duplicate Polygons', self.copySelectedShape,
                       shortcuts['duplicate_polygon'], 'copy',
-                      'Create a duplicate of the selected polygon',
+                      'Create a duplicate of the selected polygons',
                       enabled=False)
         undoLastPoint = action('Undo last point', self.canvas.undoLastPoint,
                                shortcuts['undo_last_point'], 'undo',
@@ -858,11 +859,20 @@ class MainWindow(QtWidgets.QMainWindow):
                     return True
         return False
 
-    def editLabel(self, item=None):
+    def editLabel(self, item=False):
+        if item and not isinstance(item, QtWidgets.QListWidgetItem):
+            raise TypeError('unsupported type of item: {}'.format(type(item)))
+
         if not self.canvas.editing():
             return
-        item = item if item else self.currentItem()
-        text = self.labelDialog.popUp(item.text() if item else None)
+        if not item:
+            item = self.currentItem()
+        if item is None:
+            return
+        shape = self.labelList.get_shape_from_item(item)
+        if shape is None:
+            return
+        text, flags = self.labelDialog.popUp(shape.label, flags=shape.flags)
         if text is None:
             return
         if not self.validateLabel(text):
@@ -870,6 +880,8 @@ class MainWindow(QtWidgets.QMainWindow):
                               "Invalid label '{}' with validation type '{}'"
                               .format(text, self._config['validate_label']))
             return
+        shape.label = text
+        shape.flags = flags
         item.setText(text)
         self.setDirty()
         if not self.uniqLabelList.findItems(text, Qt.MatchExactly):
@@ -899,22 +911,24 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.loadFile(filename)
 
     # React to canvas signals.
-    def shapeSelectionChanged(self, selected=False):
-        if self._noSelectionSlot:
-            self._noSelectionSlot = False
-        else:
-            shape = self.canvas.selectedShape
-            if shape:
-                item = self.labelList.get_item_from_shape(shape)
-                item.setSelected(True)
-                self.labelList.setCurrentItem(item, QItemSelectionModel.Select)
-            else:
-                self.labelList.clearSelection()
-        self.actions.delete.setEnabled(selected)
-        self.actions.copy.setEnabled(selected)
-        self.actions.edit.setEnabled(selected)
-        self.actions.shapeLineColor.setEnabled(selected)
-        self.actions.shapeFillColor.setEnabled(selected)
+    def shapeSelectionChanged(self, selected_shapes):
+        self._noSelectionSlot = True
+        for shape in self.canvas.selectedShapes:
+            shape.selected = False
+        self.labelList.clearSelection()
+        self.canvas.selectedShapes = selected_shapes
+        for shape in self.canvas.selectedShapes:
+            shape.selected = True
+            item = self.labelList.get_item_from_shape(shape)
+            item.setSelected(True)
+            self.labelList.setCurrentItem(item, QItemSelectionModel.Select)
+        self._noSelectionSlot = False
+        n_selected = len(selected_shapes)
+        self.actions.delete.setEnabled(n_selected)
+        self.actions.copy.setEnabled(n_selected)
+        self.actions.edit.setEnabled(n_selected == 1)
+        self.actions.shapeLineColor.setEnabled(n_selected)
+        self.actions.shapeFillColor.setEnabled(n_selected)
 
     def addLabel(self, shape, add_to_end):
         item = QtWidgets.QListWidgetItem(shape.label)
@@ -933,27 +947,43 @@ class MainWindow(QtWidgets.QMainWindow):
         for action in self.actions.onShapesPresent:
             action.setEnabled(True)
 
-    def remLabel(self, shape):
-        item = self.labelList.get_item_from_shape(shape)
-        self.labelList.takeItem(self.labelList.row(item))
+    def remLabels(self, shapes):
+        for shape in shapes:
+            item = self.labelList.get_item_from_shape(shape)
+            self.labelList.takeItem(self.labelList.row(item))
 
     def loadShapes(self, shapes, replace=True):
+        self._noSelectionSlot = True
         for shape in shapes:
             self.addLabel(shape, add_to_end = True)
+        self.labelList.clearSelection()
+        self._noSelectionSlot = False
         self.canvas.loadShapes(shapes, replace=replace)
 
     def loadLabels(self, shapes):
         s = []
-        for label, points, line_color, fill_color, shape_type in shapes:
+        for label, points, line_color, fill_color, shape_type, flags in shapes:
             shape = Shape(label=label, shape_type=shape_type)
             for x, y in points:
-                shape.addPoint(QtCore.QPoint(x, y))
+                shape.addPoint(QtCore.QPointF(x, y))
             shape.close()
-            s.append(shape)
+
             if line_color:
                 shape.line_color = QtGui.QColor(*line_color)
+
             if fill_color:
                 shape.fill_color = QtGui.QColor(*fill_color)
+
+            default_flags = {}
+            if self._config['label_flags']:
+                for pattern, keys in self._config['label_flags'].items():
+                    if re.match(pattern, label):
+                        for key in keys:
+                            default_flags[key] = False
+            shape.flags = default_flags
+            shape.flags.update(flags)
+
+            s.append(shape)
         self.loadShapes(s)
 
     def loadFlags(self, flags):
@@ -976,6 +1006,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if s.fill_color != self.fillColor else None,
                 points=[(p.x(), p.y()) for p in s.points],
                 shape_type=s.shape_type,
+                flags=s.flags
             )
 
         shapes = [format_shape(shape) for shape in self.labelList.shapes]
@@ -1019,16 +1050,22 @@ class MainWindow(QtWidgets.QMainWindow):
             return False
 
     def copySelectedShape(self):
-        self.addLabel(self.canvas.copySelectedShape(), add_to_end = False)
-        # fix copy and delete
-        self.shapeSelectionChanged(True)
+        added_shapes = self.canvas.copySelectedShapes()
+        self.labelList.clearSelection()
+        for shape in added_shapes:
+            self.addLabel(shape, add_to_end = False)
+        self.setDirty()
 
     def labelSelectionChanged(self):
-        item = self.currentItem()
-        if item and self.canvas.editing():
-            self._noSelectionSlot = True
-            shape = self.labelList.get_shape_from_item(item)
-            self.canvas.selectShape(shape)
+        if self._noSelectionSlot:
+            return
+        if self.canvas.editing():
+            selected_shapes = []
+            for item in self.labelList.selectedItems():
+                shape = self.labelList.get_shape_from_item(item)
+                selected_shapes.append(shape)
+            if selected_shapes:
+                self.canvas.selectShapes(selected_shapes)
 
     def labelItemChanged(self, item):
         shape = self.labelList.get_shape_from_item(item)
@@ -1047,7 +1084,8 @@ class MainWindow(QtWidgets.QMainWindow):
         position MUST be in global coordinates.
         """
         items = self.uniqLabelList.selectedItems()
-        text = None
+        text = ''
+        flags = {}
         if items:
             text = items[0].text()
         if self._config['display_label_popup'] or not text:
@@ -1058,22 +1096,23 @@ class MainWindow(QtWidgets.QMainWindow):
                 if len(split) > 1 and split[-1].isdigit():
                     split[-1] = str(int(split[-1]) + 1)
                     text = '-'.join(split)
-            text = self.labelDialog.popUp(text)
+            text, flags = self.labelDialog.popUp(text)
 
-        if text is not None and not self.validateLabel(text):
+        if text and not self.validateLabel(text):
             self.errorMessage('Invalid label',
                               "Invalid label '{}' with validation type '{}'"
                               .format(text, self._config['validate_label']))
-            text = None
-        if text is None:
-            self.canvas.undoLastLine()
-            self.canvas.shapesBackups.pop()
-        else:
-            self.addLabel(self.canvas.setLastLabel(text), add_to_end = False)
+            text = ''
+        if text:
+            self.labelList.clearSelection()
+            self.addLabel(self.canvas.setLastLabel(text, flags), add_to_end = False)
             self.actions.editMode.setEnabled(True)
             self.actions.undoLastPoint.setEnabled(False)
             self.actions.undo.setEnabled(True)
             self.setDirty()
+        else:
+            self.canvas.undoLastLine()
+            self.canvas.shapesBackups.pop()
 
     def scrollRequest(self, delta, orientation):
         units = - delta * 0.1  # natural scroll
@@ -1579,11 +1618,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def deleteSelectedShape(self):
         yes, no = QtWidgets.QMessageBox.Yes, QtWidgets.QMessageBox.No
-        msg = 'You are about to permanently delete this polygon, ' \
-              'proceed anyway?'
+        msg = 'You are about to permanently delete {} polygons, ' \
+              'proceed anyway?'.format(len(self.canvas.selectedShapes))
         if yes == QtWidgets.QMessageBox.warning(self, 'Attention', msg,
                                                 yes | no):
-            self.remLabel(self.canvas.deleteSelected())
+            self.remLabels(self.canvas.deleteSelected())
             self.setDirty()
             if self.noShapes():
                 for action in self.actions.onShapesPresent:
@@ -1593,7 +1632,8 @@ class MainWindow(QtWidgets.QMainWindow):
         color = self.colorDialog.getColor(
             self.lineColor, 'Choose line color', default=DEFAULT_LINE_COLOR)
         if color:
-            self.canvas.selectedShape.line_color = color
+            for shape in self.canvas.selectedShapes:
+                shape.line_color = color
             self.canvas.update()
             self.setDirty()
 
@@ -1601,13 +1641,16 @@ class MainWindow(QtWidgets.QMainWindow):
         color = self.colorDialog.getColor(
             self.fillColor, 'Choose fill color', default=DEFAULT_FILL_COLOR)
         if color:
-            self.canvas.selectedShape.fill_color = color
+            for shape in self.canvas.selectedShapes:
+                shape.fill_color = color
             self.canvas.update()
             self.setDirty()
 
     def copyShape(self):
         self.canvas.endMove(copy=True)
-        self.addLabel(self.canvas.selectedShape, add_to_end = False)
+        self.labelList.clearSelection()
+        for shape in self.canvas.selectedShapes:
+            self.addLabel(shape, add_to_end = False)
         self.setDirty()
 
     def moveShape(self):

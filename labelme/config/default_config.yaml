@@ -7,6 +7,7 @@ show_diff_with_prev_img: false
 logger_level: info
 
 flags: null
+label_flags: null
 labels: null
 file_search: null
 sort_labels: true

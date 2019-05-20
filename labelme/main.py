@@ -3,6 +3,7 @@ import codecs
 import logging
 import os
 import sys
+import yaml
 
 from qtpy import QtWidgets
 
@@ -15,13 +16,6 @@ from labelme.utils import newIcon
 
 
 def main():
-    try:
-        _main()
-    except Exception as e:
-        logger.error(e)
-
-
-def _main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--version', '-V', action='store_true', help='show version'
@@ -78,6 +72,14 @@ def _main():
         default=argparse.SUPPRESS,
     )
     parser.add_argument(
+        '--labelflags',
+        dest='label_flags',
+        help='yaml string of label specific flags OR file containing json '
+             'string of label specific flags (ex. {person-\d+: [male, tall], '
+             'dog-\d+: [black, brown, white], .*: [occluded]})',
+        default=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         '--labels',
         help='comma separated list of labels OR file containing labels',
         default=argparse.SUPPRESS,
@@ -122,6 +124,13 @@ def _main():
                 args.labels = [l.strip() for l in f if l.strip()]
         else:
             args.labels = [l for l in args.labels.split(',') if l]
+
+    if hasattr(args, 'label_flags'):
+        if os.path.isfile(args.label_flags):
+            with codecs.open(args.label_flags, 'r', encoding='utf-8') as f:
+                args.label_flags = yaml.load(f)
+        else:
+            args.label_flags = yaml.load(args.label_flags)
 
     config_from_args = args.__dict__
     config_from_args.pop('version')
