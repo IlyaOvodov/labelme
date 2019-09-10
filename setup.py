@@ -34,6 +34,9 @@ install_requires = [
     'Pillow>=2.8.0',
     'PyYAML',
     'qtpy',
+    'numpy',
+    'scipy',
+    'scikit-image',
     'termcolor',
 ]
 
